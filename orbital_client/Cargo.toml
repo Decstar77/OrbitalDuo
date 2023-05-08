@@ -1,0 +1,23 @@
+[package]
+name = "orbital_client"
+version = "0.1.0"
+edition = "2021"
+default-run = "orbital_client"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+orbital_shared = { path = "../orbital_shared" }
+cgmath = { version = "0.18.0", features = ["serde"] }
+gl = "0.14.0"
+glfw = "0.51.0"
+alto = "3.0.4"
+hound = "3.5.0"
+freetype-rs = "0.32.0"
+rand = "0.8.5"
+lazy_static = "1.4.0"
+stb_image = "0.2.5"
+
+# Shared
+serde = { version = "1.0.160", features = ["derive"] }
+serde_json = "1.0"

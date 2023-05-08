@@ -1,0 +1,8 @@
+[workspace]
+
+
+members = [
+    "orbital_client",
+    "orbital_server",
+    "orbital_shared"
+]
