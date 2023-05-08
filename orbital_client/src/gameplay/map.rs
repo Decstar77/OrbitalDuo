@@ -429,6 +429,7 @@ impl GameMap {
         let fs = &mut state.fs;
 
         rs.camera_begin(self.client.camera);
+        rs.draw_sprite("planet00", Vec2::new(0.0, 0.0));
         let mouse_pos_world =
             rs.screen_pos_to_world_pos(&self.client.camera, fs.mouse_pos);
 

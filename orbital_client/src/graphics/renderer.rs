@@ -1,6 +1,6 @@
 use std::ffi::CStr;
 use std::mem;
-use std::os::raw::{c_char, c_void};
+use std::os::raw::c_void;
 use std::{collections::HashMap, ffi::CString, fs::File, io::Read, ptr};
 
 use gl::types::*;
@@ -9,12 +9,12 @@ use crate::config::get_config;
 use crate::types::*;
 use cgmath::*;
 
-use super::ui::*;
-use super::window::{FrameState, Window};
+use super::window::Window;
 
 pub struct ShaderProgram {
     program_handle: u32,
     uniform_ids: HashMap<String, GLint>,
+    name: String,
 }
 
 impl ShaderProgram {
@@ -22,11 +22,12 @@ impl ShaderProgram {
         ShaderProgram {
             program_handle: 0,
             uniform_ids: HashMap::new(),
+            name: String::new(),
         }
     }
 
     pub fn new_from_file(vertex_shader_path: &str, fragment_shader_path: &str) -> ShaderProgram {
-        let mut vertex_shader_file = File::open(vertex_shader_path)
+        let mut vertex_shader_file: File = File::open(vertex_shader_path)
             .unwrap_or_else(|_| panic!("Failed to open {}", vertex_shader_path));
         let mut fragment_shader_file = File::open(fragment_shader_path)
             .unwrap_or_else(|_| panic!("Failed to open {}", fragment_shader_path));
@@ -60,9 +61,12 @@ impl ShaderProgram {
             gl::DeleteShader(vertex_shader);
             gl::DeleteShader(fragment_shader);
 
+            let program_name = fragment_shader_path.to_string();
+
             ShaderProgram {
                 program_handle,
                 uniform_ids: HashMap::new(),
+                name: program_name,
             }
         }
     }
@@ -86,7 +90,10 @@ impl ShaderProgram {
         };
 
         if uniform_location < 0 {
-            panic!("Cannot locate uniform: {}", uniform_name);
+            panic!(
+                "Cannot locate uniform: {} for shader {}",
+                uniform_name, self.name
+            );
         } else {
             self.uniform_ids
                 .insert(uniform_name.to_string(), uniform_location);
@@ -144,7 +151,7 @@ impl Texture {
         }
     }
 
-    pub fn new_from_file(path: &str) -> Texture {
+    pub fn load_from_file(path: &str) -> Texture {
         let image = stb_image::image::load(path);
         match image {
             stb_image::image::LoadResult::Error(_) => {
@@ -172,40 +179,43 @@ impl Texture {
                 );
                 gl::BindTexture(gl::TEXTURE_2D, 0);
 
+                println!("Loaded image {} as u8rgba, creating texture {}", path, id);
+
                 Texture {
                     id,
                     width: image.width as i32,
                     height: image.height as i32,
                 }
             },
-            stb_image::image::LoadResult::ImageF32(image) => {
-                unsafe {
-                    let mut id = 0;
-                    gl::GenTextures(1, &mut id);
-                    gl::BindTexture(gl::TEXTURE_2D, id);
-                    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
-                    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
-                    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
-                    gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
-                    gl::TexImage2D(
-                        gl::TEXTURE_2D,
-                        0,
-                        gl::RGBA as i32,
-                        image.width as i32,
-                        image.height as i32,
-                        0,
-                        gl::RGBA,
-                        gl::FLOAT,
-                        image.data.as_ptr() as *const std::ffi::c_void,
-                    );
+            stb_image::image::LoadResult::ImageF32(image) => unsafe {
+                let mut id = 0;
+                gl::GenTextures(1, &mut id);
+                gl::BindTexture(gl::TEXTURE_2D, id);
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+                gl::TexImage2D(
+                    gl::TEXTURE_2D,
+                    0,
+                    gl::RGBA as i32,
+                    image.width as i32,
+                    image.height as i32,
+                    0,
+                    gl::RGBA,
+                    gl::FLOAT,
+                    image.data.as_ptr() as *const std::ffi::c_void,
+                );
+                gl::BindTexture(gl::TEXTURE_2D, 0);
 
-                    Texture {
-                        id,
-                        width: image.width as i32,
-                        height: image.height as i32,
-                    }
+                println!("Loaded image {} as float, creating texture {}", path, id);
+
+                Texture {
+                    id,
+                    width: image.width as i32,
+                    height: image.height as i32,
                 }
-            }
+            },
         }
     }
 }
@@ -300,10 +310,9 @@ impl DrawCommandText {
     }
 }
 
-struct DrawCommandSprite {
-    pub texture: Texture,
+pub struct DrawCommandSprite {
+    pub texture_id: String,
     pub pos: Vec2,
-    pub size: Vec2,
     pub col: Vec4,
 }
 
@@ -340,6 +349,13 @@ impl DrawCommand {
     fn as_text_mut(&mut self) -> &mut DrawCommandText {
         match self {
             DrawCommand::TEXT(t) => t,
+            _ => panic!("Cannot cast to text"),
+        }
+    }
+
+    fn as_sprite_mut(&mut self) -> &mut DrawCommandSprite {
+        match self {
+            DrawCommand::SPRITE(t) => t,
             _ => panic!("Cannot cast to text"),
         }
     }
@@ -480,25 +496,6 @@ impl Camera {
     }
 
     fn calc_projection_matrix(&self) -> Mat4 {
-        // let mut right = self.surface_width / 2.0;
-        // let mut left = -right;
-
-        // let mut top = self.surface_height / 2.0;
-        // let mut bottom = -top;
-
-        // let n = 256.0 * self.zoom;
-        // let aspect = self.surface_width / self.surface_height;
-
-        // left = -n * 0.5 * aspect;
-        // right = n * 0.5 * aspect;
-        // bottom = -n * 0.5;
-        // top = n * 0.5;
-
-        // left = left.round();
-        // right = right.round();
-        // bottom = bottom.round();
-        // top = top.round();
-
         let left = -250.0;
         let right = 250.0;
         let bottom = -150.0;
@@ -558,11 +555,14 @@ extern "system" fn gl_debug_output(
 }
 
 pub struct RenderState {
+    pub textures_path: String,
     pub commands: Vec<DrawCommand>,
     pub shape_program: ShaderProgram,
     pub shape_vertex_buffer: VertexBuffer,
     pub font_program: ShaderProgram,
     pub font_vertex_buffer: VertexBuffer,
+    pub sprite_program: ShaderProgram,
+    pub sprite_vertex_buffer: VertexBuffer,
     pub surface_width: f32,
     pub surface_height: f32,
     pub surface_aspect: f32,
@@ -570,16 +570,22 @@ pub struct RenderState {
     pub camera_active: bool,
     pub camera: Camera,
     pub default_font: Font,
+    pub textures: HashMap<String, Texture>,
 }
 
 impl RenderState {
     pub fn new(window: &mut Window) -> RenderState {
+        let texture_path = get_config().assets_path.clone() + "planets/";
+
         let mut rs = RenderState {
+            textures_path: texture_path,
             commands: Vec::new(),
             shape_program: ShaderProgram::new(),
             shape_vertex_buffer: VertexBuffer::new(),
             font_program: ShaderProgram::new(),
             font_vertex_buffer: VertexBuffer::new(),
+            sprite_program: ShaderProgram::new(),
+            sprite_vertex_buffer: VertexBuffer::new(),
             surface_width: 0.0,
             surface_height: 0.0,
             surface_aspect: 0.0,
@@ -587,6 +593,7 @@ impl RenderState {
             camera_active: false,
             camera: Camera::new(window.client_width, window.client_height),
             default_font: Font::new(),
+            textures: HashMap::new(),
         };
 
         unsafe {
@@ -609,6 +616,7 @@ impl RenderState {
         rs.shape_program = rs.create_shader_program(
             include_str!("shaders/shape_rendering.vs.glsl"),
             include_str!("shaders/shape_rendering.fs.glsl"),
+            "shape_program",
         );
 
         rs.shape_vertex_buffer = rs.create_vertex_buffer_dynamic(2 * 4 * 6, || unsafe {
@@ -621,9 +629,23 @@ impl RenderState {
         rs.font_program = rs.create_shader_program(
             include_str!("shaders/font_rendering.vs.glsl"),
             include_str!("shaders/font_rendering.fs.glsl"),
+            "font_program",
         );
 
         rs.font_vertex_buffer = rs.create_vertex_buffer_dynamic(4 * 4 * 6, || unsafe {
+            let stride = 4 * mem::size_of::<f32>() as i32;
+            gl::EnableVertexAttribArray(0);
+            gl::VertexAttribPointer(0, 4, gl::FLOAT, gl::FALSE, stride, ptr::null());
+            stride
+        });
+
+        rs.sprite_program = rs.create_shader_program(
+            include_str!("shaders/sprite_rendering.vs.glsl"),
+            include_str!("shaders/sprite_rendering.fs.glsl"),
+            "sprite_program",
+        );
+
+        rs.sprite_vertex_buffer = rs.create_vertex_buffer_dynamic(4 * 4 * 6, || unsafe {
             let stride = 4 * mem::size_of::<f32>() as i32;
             gl::EnableVertexAttribArray(0);
             gl::VertexAttribPointer(0, 4, gl::FLOAT, gl::FALSE, stride, ptr::null());
@@ -681,7 +703,12 @@ impl RenderState {
         return Vec2::new(v.x, -v.y);
     }
 
-    pub fn create_shader_program(&mut self, vs_source: &str, fs_source: &str) -> ShaderProgram {
+    pub fn create_shader_program(
+        &mut self,
+        vs_source: &str,
+        fs_source: &str,
+        name: &str,
+    ) -> ShaderProgram {
         unsafe {
             let vertex_shader = gl::CreateShader(gl::VERTEX_SHADER);
             let c_str_vert = CString::new(vs_source.as_bytes()).unwrap();
@@ -703,6 +730,7 @@ impl RenderState {
             ShaderProgram {
                 program_handle,
                 uniform_ids: HashMap::new(),
+                name: name.to_string(),
             }
         }
     }
@@ -870,6 +898,20 @@ impl RenderState {
         }));
 
         self.commands.last_mut().unwrap().as_text_mut()
+    }
+
+    pub fn draw_sprite(&mut self, sprite_id: &str, mut pos: Vec2) -> &mut DrawCommandSprite {
+        if self.camera_active {
+            pos = self.world_pos_to_screen_pos(&self.camera, pos);
+        }
+
+        self.commands.push(DrawCommand::SPRITE(DrawCommandSprite {
+            texture_id: sprite_id.to_string(),
+            pos: pos,
+            col: Vec4::new(1.0, 1.0, 1.0, 1.0),
+        }));
+
+        self.commands.last_mut().unwrap().as_sprite_mut()
     }
 
     pub fn get_text_width(&self, text: &str) -> f32 {
@@ -1077,8 +1119,47 @@ impl RenderState {
                     gl::BindVertexArray(0);
                 },
                 DrawCommand::SPRITE(sprite) => {
+                    if !self.textures.contains_key(&sprite.texture_id) {
+                        let path = self.textures_path.clone() + &sprite.texture_id + ".png";
+                        let texture = Texture::load_from_file(path.as_str());
+                        self.textures.insert(sprite.texture_id.clone(), texture);
+                    }
 
-                },
+                    let texture = self.textures.get(&sprite.texture_id).unwrap();
+
+                    let xpos = sprite.pos.x;
+                    let ypos = sprite.pos.y;
+                    let w = texture.width as f32 / 4.0;
+                    let h = texture.height as f32 / 4.0;
+                    let vertices: [(f32, f32, f32, f32); 6] = [
+                        (xpos, ypos - h, 0.0, 0.0),
+                        (xpos, ypos, 0.0, 1.0),
+                        (xpos + w, ypos, 1.0, 1.0),
+                        (xpos, ypos - h, 0.0, 0.0),
+                        (xpos + w, ypos, 1.0, 1.0),
+                        (xpos + w, ypos - h, 1.0, 0.0),
+                    ];
+
+                    self.sprite_program.use_program();
+                    self.sprite_program
+                        .set_mat4("projection", self.surface_projection);
+                    self.sprite_program.set_int("sprite_texture", 0);
+                    self.sprite_program.set_vec4("sprite_color", sprite.col);
+
+                    unsafe {
+                        gl::BindTextureUnit(0, texture.id);
+                        gl::BindVertexArray(self.sprite_vertex_buffer.vao);
+                        gl::BindBuffer(gl::ARRAY_BUFFER, self.sprite_vertex_buffer.vbo);
+                        gl::BufferSubData(
+                            gl::ARRAY_BUFFER,
+                            0,
+                            mem::size_of_val(&vertices) as isize,
+                            vertices.as_ptr() as *const c_void,
+                        );
+                        gl::BindBuffer(gl::ARRAY_BUFFER, 0);
+                        gl::DrawArrays(gl::TRIANGLES, 0, 6);
+                    }
+                }
             }
         }
 

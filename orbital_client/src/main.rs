@@ -7,8 +7,6 @@ mod audio;
 mod network;
 mod config;
 
-use std::hash::Hash;
-
 use config::config_parse_command_line;
 
 use crate::graphics::renderer::{RenderState};
@@ -34,7 +32,7 @@ fn main() {
     let fs = FrameState::new();
     let aud = AudioState::new();
     let ns = NetworkState::new();
-    
+
     let mut state = State {
         rs : rs,
         fs : fs,
